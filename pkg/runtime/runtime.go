@@ -23,15 +23,19 @@ type Runtime struct {
 }
 
 type Options struct {
-	Roots          []mcp.Root
-	Profiles       []string
-	MaxConcurrency int
+	Roots            []mcp.Root
+	Profiles         []string
+	MaxConcurrency   int
+	CallbackServer   mcp.CallbackServer
+	OAuthRedirectURL string
 }
 
 func (o Options) Merge(other Options) (result Options) {
 	result.MaxConcurrency = complete.Last(o.MaxConcurrency, other.MaxConcurrency)
 	result.Profiles = append(o.Profiles, other.Profiles...)
 	result.Roots = append(o.Roots, other.Roots...)
+	result.CallbackServer = complete.Last(o.CallbackServer, other.CallbackServer)
+	result.OAuthRedirectURL = complete.Last(o.OAuthRedirectURL, other.OAuthRedirectURL)
 	return
 }
 
@@ -41,6 +45,8 @@ func NewRuntime(cfg llm.Config, opts ...Options) *Runtime {
 	registry := tools.NewToolsService(tools.RegistryOptions{
 		Roots:       opt.Roots,
 		Concurrency: opt.MaxConcurrency,
+		CallbackServer:   opt.CallbackServer,
+		OAuthRedirectURL: opt.OAuthRedirectURL,
 	})
 	agents := agents.New(completer, registry)
 	sampler := sampling.NewSampler(agents)

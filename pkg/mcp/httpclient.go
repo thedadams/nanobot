@@ -23,7 +23,10 @@ const SessionIDHeader = "Mcp-Session-Id"
 type HTTPClient struct {
 	ctx           context.Context
 	cancel        context.CancelFunc
-	handler       wireHandler
+	clientLock   sync.RWMutex
+	httpClient   *http.Client
+	handler      wireHandler
+	oauthHandler *OAuth
 	baseURL       string
 	messageURL    string
 	serverName    string
@@ -36,9 +39,11 @@ type HTTPClient struct {
 	needReconnect bool
 }
 
-func NewHTTPClient(serverName, baseURL string, headers map[string]string) *HTTPClient {
+func NewHTTPClient(serverName, baseURL, oauthRedirectURL string, callbackServer CallbackServer, clientCredLookup ClientCredLookup, headers map[string]string) *HTTPClient {
 	_, initialized := headers[SessionIDHeader]
 	return &HTTPClient{
+		httpClient:   http.DefaultClient,
+		oauthHandler: NewOAuth(callbackServer, clientCredLookup, oauthRedirectURL),
 		baseURL:       baseURL,
 		messageURL:    baseURL,
 		serverName:    serverName,
@@ -139,9 +144,22 @@ func (s *HTTPClient) ensureSSE(ctx context.Context, msg *Message, lastEventID an
 		req.Header.Set("Last-Event-ID", fmt.Sprintf("%v", lastEventID))
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	s.clientLock.RLock()
+	httpClient := s.httpClient
+	s.clientLock.RUnlock()
+
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return err
+	}
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		return AuthRequiredErr{
+			ProtectedResourceValue: resp.Header.Get("WWW-Authenticate"),
+			Err:                    fmt.Errorf("failed to connect to SSE server: %s: %s", resp.Status, body),
+		}
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
@@ -203,7 +221,7 @@ func (s *HTTPClient) ensureSSE(ctx context.Context, msg *Message, lastEventID an
 				return fmt.Errorf("failed to create initialize message req: %w", err), true
 			}
 
-			initResp, err := http.DefaultClient.Do(initReq)
+			initResp, err := httpClient.Do(initReq)
 			if err != nil {
 				return fmt.Errorf("failed to POST initialize message: %w", err), true
 			}
@@ -283,11 +301,23 @@ func (s *HTTPClient) initialize(ctx context.Context, msg Message) (err error) {
 		return err
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	s.clientLock.RLock()
+	httpClient := s.httpClient
+	s.clientLock.RUnlock()
+
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		streamingErrorMessage, _ := io.ReadAll(resp.Body)
+		return AuthRequiredErr{
+			ProtectedResourceValue: resp.Header.Get("WWW-Authenticate"),
+			Err:                    fmt.Errorf("failed to initialize HTTP Streaming client: %s: %s", resp.Status, streamingErrorMessage),
+		}
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		streamingErrorMessage, _ := io.ReadAll(resp.Body)
@@ -324,7 +354,36 @@ func (s *HTTPClient) initialize(ctx context.Context, msg Message) (err error) {
 	return s.ensureSSE(ctx, nil, nil)
 }
 
-func (s *HTTPClient) Send(ctx context.Context, msg Message) error {
+func (s *HTTPClient) Send(ctx context.Context, msg Message) (err error) {
+	defer func() {
+		if err == nil {
+			return
+		}
+
+		var oauthErr AuthRequiredErr
+		if !errors.As(err, &oauthErr) {
+			return
+		}
+
+		var httpClient *http.Client
+		httpClient, err = s.oauthHandler.OAuthClient(s.ctx, s.serverName, s.baseURL, oauthErr.ProtectedResourceValue)
+		if err != nil {
+			streamError := fmt.Errorf("failed to initialize HTTP Streaming client: %v", oauthErr.Err)
+			err = errors.Join(streamError, err)
+			return
+		}
+
+		s.clientLock.Lock()
+		s.httpClient = httpClient
+		s.clientLock.Unlock()
+
+		err = s.send(ctx, msg)
+	}()
+
+	return s.send(ctx, msg)
+}
+
+func (s *HTTPClient) send(ctx context.Context, msg Message) error {
 	if !s.initialized {
 		if msg.Method != "initialize" {
 			return fmt.Errorf("client not initialized, must send InitializeRequest first")
@@ -345,17 +404,30 @@ func (s *HTTPClient) Send(ctx context.Context, msg Message) error {
 		return err
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	s.clientLock.RLock()
+	httpClient := s.httpClient
+	s.clientLock.RUnlock()
+
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusUnauthorized {
+		streamingErrorMessage, _ := io.ReadAll(resp.Body)
+		return AuthRequiredErr{
+			ProtectedResourceValue: resp.Header.Get("WWW-Authenticate"),
+			Err:                    fmt.Errorf("failed to send message: %s: %s", resp.Status, streamingErrorMessage),
+		}
+	}
+
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
 		return fmt.Errorf("failed to send message: %s", resp.Status)
 	}
 
-	if s.sse {
+	// It is possible for the ContentLength here to be -1.
+	if s.sse || resp.StatusCode == http.StatusAccepted {
 		return nil
 	}
 

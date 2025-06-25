@@ -37,11 +37,17 @@ type ClientOption struct {
 	ParentSession *Session
 	Session       *SessionState
 	Runner        *Runner
+	OAuthRedirectURL string
+	CallbackServer   CallbackServer
+	ClientCredLookup ClientCredLookup
 }
 
 func (c ClientOption) Complete() ClientOption {
 	if c.Runner == nil {
 		c.Runner = &Runner{}
+	}
+	if c.ClientCredLookup == nil {
+		c.ClientCredLookup = NewClientLookupFromEnv()
 	}
 	return c
 }
@@ -71,6 +77,11 @@ func (c ClientOption) Merge(other ClientOption) (result ClientOption) {
 	if other.OnElicit != nil {
 		result.OnElicit = other.OnElicit
 	}
+	result.CallbackServer = c.CallbackServer
+	if other.CallbackServer != nil {
+		result.CallbackServer = other.CallbackServer
+	}
+	result.OAuthRedirectURL = complete.Last(c.OAuthRedirectURL, other.OAuthRedirectURL)
 	result.Env = complete.MergeMap(c.Env, other.Env)
 	result.Session = complete.Last(c.Session, other.Session)
 	result.ParentSession = complete.Last(c.ParentSession, other.ParentSession)
@@ -219,6 +230,10 @@ func NewSession(ctx context.Context, serverName string, config Server, opts ...C
 	if config.Command == "" && config.BaseURL == "" {
 		return nil, fmt.Errorf("no command or base URL provided")
 	} else if config.BaseURL != "" {
+		if (opt.CallbackServer != nil) != (opt.OAuthRedirectURL != "") {
+			return nil, fmt.Errorf("must specify both or neither callback server and OAuth redirect URL")
+		}
+
 		if config.Command != "" {
 			var err error
 			config, err = opt.Runner.Run(ctx, opt.Roots, opt.Env, serverName, config)
@@ -236,7 +251,7 @@ func NewSession(ctx context.Context, serverName string, config Server, opts ...C
 			}
 			header["Mcp-Session-Id"] = opt.Session.ID
 		}
-		wire = NewHTTPClient(serverName, config.BaseURL, header)
+		wire = NewHTTPClient(serverName, config.BaseURL, opt.OAuthRedirectURL, opt.CallbackServer, opt.ClientCredLookup, envvar.ReplaceMap(opt.Env, config.Headers))
 	} else {
 		wire, err = newStdioClient(ctx, opt.Roots, opt.Env, serverName, config, opt.Runner)
 		if err != nil {
