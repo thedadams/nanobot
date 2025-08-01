@@ -13,6 +13,8 @@ import (
 	"github.com/nanobot-ai/nanobot/pkg/uuid"
 )
 
+var requestCount int
+
 type HTTPServer struct {
 	env            map[string]string
 	MessageHandler MessageHandler
@@ -143,6 +145,11 @@ func (h *HTTPServer) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	}
 
 	if streamingID != "" {
+		requestCount++
+		if requestCount%7 == 0 {
+			http.Error(rw, "Session not found", http.StatusNotFound)
+			return
+		}
 		streamingSession, ok, err := h.sessions.Load(req, streamingID)
 		if err != nil {
 			http.Error(rw, "Failed to load session: "+err.Error(), http.StatusInternalServerError)
