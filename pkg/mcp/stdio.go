@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	log2 "log"
 	"os/exec"
 	"strings"
 	"sync"
@@ -89,7 +88,7 @@ func (s *Stdio) Start(ctx context.Context, handler WireHandler) error {
 	go func() {
 		err := s.start(ctx, handler)
 		if err != nil {
-			log2.Fatal(err)
+			log.Errorf(context.Background(), "failed to start stdio session: %v", err)
 		}
 	}()
 	return nil

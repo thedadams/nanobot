@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"runtime/debug"
 	"sync"
 
 	"github.com/nanobot-ai/nanobot/pkg/uuid"
@@ -185,6 +187,7 @@ func (s *serverWire) exchange(ctx context.Context, msg Message) (Message, error)
 	case <-ctx.Done():
 		return Message{}, ctx.Err()
 	case <-s.ctx.Done():
+		os.Stdout.Write(debug.Stack())
 		return Message{}, s.ctx.Err()
 	case m, ok := <-ch:
 		if !ok {
@@ -195,6 +198,8 @@ func (s *serverWire) exchange(ctx context.Context, msg Message) (Message, error)
 }
 
 func (s *serverWire) Close(bool) {
+	// Print the stacktrace
+	os.Stdout.Write(debug.Stack())
 	s.cancel(fmt.Errorf("session %s closed", s.sessionID))
 }
 
@@ -216,6 +221,7 @@ func (s *serverWire) Send(ctx context.Context, req Message) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-s.ctx.Done():
+		os.Stdout.Write(debug.Stack())
 		return s.ctx.Err()
 	case <-s.noReader:
 		return ErrNoReader
