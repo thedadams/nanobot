@@ -55,6 +55,7 @@ dockers:
   - image_templates:
       - "ghcr.io/nanobot-ai/nanobot:v{{ .Version }}-amd64"
       - "ghcr.io/nanobot-ai/nanobot:latest-amd64"
+      - "ghcr.io/nanobot-ai/nanobot:main-amd64"
     dockerfile: Dockerfile
     use: buildx
     build_flag_templates:
@@ -69,6 +70,7 @@ dockers:
   - image_templates:
       - "ghcr.io/nanobot-ai/nanobot:v{{ .Version }}-arm64"
       - "ghcr.io/nanobot-ai/nanobot:latest-arm64"
+      - "ghcr.io/nanobot-ai/nanobot:main-arm64"
     dockerfile: Dockerfile
     use: buildx
     build_flag_templates:
@@ -89,6 +91,10 @@ docker_manifests:
     image_templates:
       - "ghcr.io/nanobot-ai/nanobot:latest-amd64"
       - "ghcr.io/nanobot-ai/nanobot:latest-arm64"
+  - name_template: "ghcr.io/nanobot-ai/nanobot:main"
+    image_templates:
+      - "ghcr.io/nanobot-ai/nanobot:main-amd64"
+      - "ghcr.io/nanobot-ai/nanobot:main-arm64"
 brews:
   - name: nanobot
     description: 'Nanobot cli'
